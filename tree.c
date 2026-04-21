@@ -119,25 +119,35 @@ int tree_serialize(const Tree *tree, void **data_out, size_t *len_out) {
 int tree_from_index(ObjectID *id_out) {
     if (!id_out) return -1;
 
-    Index index;
-    if (index_load(&index) != 0) {
-        return -1;
-    }
+    FILE *f = fopen(INDEX_FILE, "r");
+    if (!f) return -1;
 
     Tree tree;
     tree.count = 0;
 
-    for (int i = 0; i < index.count; i++) {
+    char mode_str[32];
+    char hash_hex[HASH_HEX_SIZE + 1];
+    unsigned long long mtime_sec;
+    unsigned long long size;
+    char path[512];
+
+    while (fscanf(f, "%31s %64s %llu %llu %511[^\n]\n",
+                  mode_str, hash_hex, &mtime_sec, &size, path) == 5) {
         if (tree.count >= MAX_TREE_ENTRIES) {
+            fclose(f);
             return -1;
         }
 
         TreeEntry *e = &tree.entries[tree.count];
+        memset(e, 0, sizeof(*e));
 
-        e->mode = index.entries[i].mode;
-        e->hash = index.entries[i].hash;
+        e->mode = (uint32_t)strtoul(mode_str, NULL, 8);
 
-        const char *path = index.entries[i].path;
+        if (hex_to_hash(hash_hex, &e->hash) != 0) {
+            fclose(f);
+            return -1;
+        }
+
         const char *name = strrchr(path, '/');
         if (name) {
             name++;
@@ -145,13 +155,16 @@ int tree_from_index(ObjectID *id_out) {
             name = path;
         }
 
-        snprintf(e->name, sizeof(e->name), "%s", name);
+        size_t name_len = strnlen(name, sizeof(e->name) - 1);
+        memcpy(e->name, name, name_len);
+        e->name[name_len] = '\0';
         tree.count++;
     }
 
+    fclose(f);
+
     void *data = NULL;
     size_t len = 0;
-
     if (tree_serialize(&tree, &data, &len) != 0) {
         return -1;
     }
